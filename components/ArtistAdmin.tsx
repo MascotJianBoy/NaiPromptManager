@@ -34,6 +34,10 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
   
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  
+  // 配额编辑状态
+  const [editingQuotaUserId, setEditingQuotaUserId] = useState<string | null>(null);
+  const [newQuotaMB, setNewQuotaMB] = useState<string>('');
 
   // Guest Code State
   const [guestCode, setGuestCode] = useState('');
@@ -135,6 +139,26 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
           await onRefreshUsers();
           setIsLoading(false);
       }
+  };
+
+  const handleUpdateQuota = async (userId: string) => {
+      const mb = parseFloat(newQuotaMB);
+      if (isNaN(mb) || mb < 0) {
+          alert('请输入有效的配额数值');
+          return;
+      }
+      const bytes = Math.round(mb * 1024 * 1024);
+      setIsLoading(true);
+      try {
+          await db.updateUserQuota(userId, bytes);
+          await onRefreshUsers();
+          setEditingQuotaUserId(null);
+          setNewQuotaMB('');
+          alert('配额更新成功');
+      } catch(e) {
+          alert('更新失败');
+      }
+      setIsLoading(false);
   };
 
   // Fetch Guest Code when Users Tab is active
@@ -411,18 +435,60 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
 
                 <div className="overflow-x-auto">
                     <table className="w-full bg-white dark:bg-gray-800 rounded shadow">
-                        <thead><tr className="text-left border-b dark:border-gray-700 text-gray-500 p-2"><th className="p-4">用户名</th><th className="p-4">角色</th><th className="p-4">注册时间</th><th className="p-4">操作</th></tr></thead>
+                        <thead><tr className="text-left border-b dark:border-gray-700 text-gray-500 p-2">
+                            <th className="p-4">用户名</th>
+                            <th className="p-4">角色</th>
+                            <th className="p-4">注册时间</th>
+                            <th className="p-4">最后登录</th>
+                            <th className="p-4">存储配额</th>
+                            <th className="p-4">操作</th>
+                        </tr></thead>
                         <tbody>
-                            {users.map(u => (
+                            {users.map(u => {
+                                const usagePercent = u.maxStorage ? Math.min(100, ((u.storageUsage || 0) / u.maxStorage) * 100) : 0;
+                                return (
                                 <tr key={u.id} className="border-b dark:border-gray-700 last:border-0 dark:text-white">
                                     <td className="p-4">{u.username}</td>
                                     <td className="p-4"><span className={`px-2 py-1 rounded text-xs ${u.role === 'admin' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>{u.role}</span></td>
                                     <td className="p-4 text-sm text-gray-500">{formatDate(u.createdAt)}</td>
+                                    <td className="p-4 text-sm text-gray-500">{formatDateTime(u.lastLogin)}</td>
+                                    <td className="p-4">
+                                        <div className="text-xs text-gray-500 mb-1">
+                                            {formatBytes(u.storageUsage)} / {formatBytes(u.maxStorage)}
+                                        </div>
+                                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                                            <div
+                                                className={`h-full rounded-full transition-all ${usagePercent > 90 ? 'bg-red-500' : usagePercent > 70 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                                                style={{ width: `${usagePercent}%` }}
+                                            ></div>
+                                        </div>
+                                        {editingQuotaUserId === u.id ? (
+                                            <div className="flex gap-1 mt-2">
+                                                <input
+                                                    type="number"
+                                                    value={newQuotaMB}
+                                                    onChange={e => setNewQuotaMB(e.target.value)}
+                                                    className="w-20 p-1 text-xs border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white"
+                                                    placeholder="MB"
+                                                />
+                                                <button onClick={() => handleUpdateQuota(u.id)} className="text-xs text-green-600 hover:text-green-700">保存</button>
+                                                <button onClick={() => { setEditingQuotaUserId(null); setNewQuotaMB(''); }} className="text-xs text-gray-500 hover:text-gray-700">取消</button>
+                                            </div>
+                                        ) : (
+                                            <button
+                                                onClick={() => { setEditingQuotaUserId(u.id); setNewQuotaMB(String(Math.round((u.maxStorage || 0) / (1024 * 1024)))); }}
+                                                className="text-xs text-indigo-500 hover:text-indigo-700 mt-1"
+                                            >
+                                                修改配额
+                                            </button>
+                                        )}
+                                    </td>
                                     <td className="p-4">
                                         {u.id !== currentUser.id && u.role !== 'guest' && <button onClick={() => handleDeleteUser(u.id)} className="text-red-500">删除</button>}
                                     </td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

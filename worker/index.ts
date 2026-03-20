@@ -67,10 +67,12 @@ const INIT_SQL = `
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL, 
-    role TEXT DEFAULT 'user', 
+    password TEXT NOT NULL,
+    role TEXT DEFAULT 'user',
     created_at INTEGER,
-    storage_usage INTEGER DEFAULT 0
+    last_login INTEGER,
+    storage_usage INTEGER DEFAULT 0,
+    max_storage INTEGER DEFAULT 314572800
   );
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -392,6 +394,8 @@ export default {
           const sessionId = crypto.randomUUID();
           const expiresAt = Date.now() + 604800000;
           await db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').bind(sessionId, user.id, expiresAt).run();
+          // 更新最后登录时间
+          await db.prepare('UPDATE users SET last_login = ? WHERE id = ?').bind(Date.now(), user.id).run();
           // 记录登录日志和每日统计
           await logAccess(db, { id: user.id, username, role: user.role }, request, 'login');
           await incrementDailyStat(db, 'user_logins');
@@ -578,15 +582,33 @@ export default {
           return json({ success: true });
       }
       if (path === '/api/users' && method === 'GET') {
-         if (currentUser.role !== 'admin') return error('Forbidden', 403);
-         const res = await db.prepare('SELECT id, username, role, created_at, storage_usage FROM users ORDER BY created_at DESC').all();
-         return json(res.results);
+          if (currentUser.role !== 'admin') return error('Forbidden', 403);
+          const res = await db.prepare('SELECT id, username, role, created_at, last_login, storage_usage, max_storage FROM users ORDER BY created_at DESC').all();
+          // 将数据库字段名（下划线）映射为前端字段名（驼峰）
+          return json(res.results.map((u: any) => ({
+              id: u.id,
+              username: u.username,
+              role: u.role,
+              createdAt: u.created_at,
+              lastLogin: u.last_login,
+              storageUsage: u.storage_usage,
+              maxStorage: u.max_storage
+          })));
       }
       if (path.startsWith('/api/users/') && method === 'DELETE') {
          if (currentUser.role !== 'admin') return error('Forbidden', 403);
          const id = path.split('/').pop();
          if (id === currentUser.id) return error('Cannot delete self', 400);
          await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+         return json({ success: true });
+      }
+      // 更新用户最大配额
+      if (path.match(/^\/api\/users\/[^/]+\/quota$/) && method === 'PUT') {
+         if (currentUser.role !== 'admin') return error('Forbidden', 403);
+         const userId = path.split('/')[3];
+         const { maxStorage } = await request.json() as any;
+         if (typeof maxStorage !== 'number' || maxStorage < 0) return error('Invalid maxStorage value', 400);
+         await db.prepare('UPDATE users SET max_storage = ? WHERE id = ?').bind(maxStorage, userId).run();
          return json({ success: true });
       }
 

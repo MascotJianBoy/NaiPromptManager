@@ -47,6 +47,10 @@ class DBService {
     await api.delete(`/users/${id}`);
   }
 
+  async updateUserQuota(userId: string, maxStorage: number): Promise<void> {
+    await api.put(`/users/${userId}/quota`, { maxStorage });
+  }
+
   // --- Admin: Guest Settings & Import ---
   async getGuestCode(): Promise<string> {
     const res = await api.get('/admin/guest-setting');
