@@ -153,6 +153,99 @@ class LocalHistoryService {
             request.onerror = () => reject(request.error);
         });
     }
+
+    /**
+     * 删除指定天数之前的历史记录
+     * @param days 天数
+     * @returns 删除的记录数量
+     */
+    async deleteOlderThan(days: number): Promise<number> {
+        const db = await this.open();
+        const cutoffTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+        
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([STORE_NAME], 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            const index = store.index('createdAt');
+            let deletedCount = 0;
+            
+            // 使用范围查询 createdAt < cutoffTime 的记录
+            const range = IDBKeyRange.upperBound(cutoffTime, true);
+            const request = index.openCursor(range);
+            
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    cursor.delete();
+                    deletedCount++;
+                    cursor.continue();
+                } else {
+                    resolve(deletedCount);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * 只保留最近的 N 条记录，删除多余的
+     * @param n 要保留的记录数量
+     * @returns 删除的记录数量
+     */
+    async keepOnly(n: number): Promise<number> {
+        const db = await this.open();
+        
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([STORE_NAME], 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            const index = store.index('createdAt');
+            let deletedCount = 0;
+            let index_count = 0;
+            
+            // 从最新记录开始遍历
+            const request = index.openCursor(null, 'prev');
+            
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    index_count++;
+                    if (index_count > n) {
+                        cursor.delete();
+                        deletedCount++;
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(deletedCount);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * 统计指定天数之前的记录数量
+     * @param days 天数
+     * @returns 记录数量
+     */
+    async countOlderThan(days: number): Promise<number> {
+        const db = await this.open();
+        const cutoffTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+        
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([STORE_NAME], 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const index = store.index('createdAt');
+            
+            // 使用范围查询 createdAt < cutoffTime 的记录
+            const range = IDBKeyRange.upperBound(cutoffTime, true);
+            const request = index.count(range);
+            
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
 }
 
 export const localHistory = new LocalHistoryService();
