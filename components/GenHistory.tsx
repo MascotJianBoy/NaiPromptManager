@@ -33,10 +33,13 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
     const [showSuccessModal, setShowSuccessModal] = useState(false);
 
     // 分页相关状态
-    const [page, setPage] = useState(0);
-    const [hasMore, setHasMore] = useState(true);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(0);
     const [totalCount, setTotalCount] = useState(0);
     const [isLoading, setIsLoading] = useState(false);
+    
+    // 缓存管理
+    const [pageCache, setPageCache] = useState<Record<number, LocalGenItem[]>>({});
 
     // 清理相关状态
     const [showCleanMenu, setShowCleanMenu] = useState(false);
@@ -47,7 +50,7 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
     const [cleanPreviewCount, setCleanPreviewCount] = useState(0);
 
     useEffect(() => {
-        loadData(true);
+        goToPage(1);
     }, []);
 
     const { PAGE_SIZE, MAX_CACHED_PAGES } = PAGINATION_CONFIG;
@@ -77,50 +80,106 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
         return true;
     };
 
-    const loadData = async (reset = false) => {
+    // 获取页面数据（优先从缓存）
+    const getPageData = async (page: number): Promise<LocalGenItem[]> => {
+        // 检查缓存
+        if (pageCache[page]) {
+            return pageCache[page];
+        }
+        
+        // 从数据库加载
+        const data = await localHistory.getPage(page - 1, PAGE_SIZE);
+        return data;
+    };
+
+    // 更新缓存策略
+    const updateCache = (page: number, data: LocalGenItem[]) => {
+        // 更新当前页缓存
+        setPageCache(prev => ({
+            ...prev,
+            [page]: data
+        }));
+
+        // 清理超出范围的缓存（只保留当前页 ± 1 页）
+        const validPages = [page - 1, page, page + 1].filter(p => p >= 1);
+        setPageCache(prev => {
+            const newCache: Record<number, LocalGenItem[]> = {};
+            validPages.forEach(p => {
+                if (prev[p]) {
+                    newCache[p] = prev[p];
+                }
+            });
+            return newCache;
+        });
+    };
+
+    // 跳转到指定页
+    const goToPage = async (page: number) => {
         if (isLoading) return;
         
+        // 计算总页数
+        const count = await localHistory.getCount();
+        const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
+        
+        // 边界检查
+        const targetPage = Math.max(1, Math.min(page, totalPages));
+        
+        if (targetPage === currentPage) return;
+        
         setIsLoading(true);
+        setCurrentPage(targetPage);
+        setTotalPages(totalPages);
+        setTotalCount(count);
+        
         try {
-            // 获取总数
-            const count = await localHistory.getCount();
-            setTotalCount(count);
+            // 获取页面数据
+            const data = await getPageData(targetPage);
+            setItems(data);
             
-            if (reset) {
-                // 重置加载第一页
-                const data = await localHistory.getPage(0, PAGE_SIZE);
-                setItems(data);
-                setPage(1);
-                setHasMore(data.length === PAGE_SIZE && count > PAGE_SIZE);
-            } else {
-                // 加载下一页
-                const data = await localHistory.getPage(page, PAGE_SIZE);
-                if (data.length > 0) {
-                    setItems(prev => {
-                        const newItems = [...prev, ...data];
-                        // 内存管理：检查缓存大小
-                        if (!checkMemoryUsage(newItems)) {
-                            // 如果缓存过大，只保留最新一页
-                            return data;
-                        }
-                        // 最多保留 MAX_CACHED_PAGES 页数据
-                        const maxItems = PAGE_SIZE * MAX_CACHED_PAGES;
-                        if (newItems.length > maxItems) {
-                            return newItems.slice(-maxItems);
-                        }
-                        return newItems;
-                    });
-                    setPage(prev => prev + 1);
-                    setHasMore(items.length + data.length < count);
-                } else {
-                    setHasMore(false);
-                }
-            }
+            // 更新缓存
+            updateCache(targetPage, data);
+            
         } catch (e) {
-            console.error('加载历史记录失败:', e);
+            console.error('加载页面失败:', e);
+            notify('加载失败，请重试', 'error');
         } finally {
             setIsLoading(false);
         }
+    };
+
+    // 加载指定页（用于预加载）
+    const loadPage = async (page: number) => {
+        if (pageCache[page] || isLoading) return;
+        
+        try {
+            const data = await getPageData(page);
+            updateCache(page, data);
+        } catch (e) {
+            console.warn('预加载页面失败:', e);
+        }
+    };
+
+    // 生成页码按钮
+    const getPageButtons = (): number[] => {
+        const buttons: number[] = [];
+        const maxButtons = 7; // 最多显示7个页码按钮
+        
+        if (totalPages <= maxButtons) {
+            // 总页数较少，显示所有页码
+            for (let i = 1; i <= totalPages; i++) {
+                buttons.push(i);
+            }
+        } else {
+            // 总页数较多，显示当前页附近的页码
+            const start = Math.max(1, currentPage - 3);
+            const end = Math.min(totalPages, start + maxButtons - 1);
+            
+            for (let i = start; i <= end; i++) {
+                buttons.push(i);
+            }
+        }
+        
+        return buttons;
     };
 
     const getDownloadFilename = () => {
@@ -135,7 +194,7 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
         if (confirm('确定删除这张图片记录吗？(无法恢复)')) {
             await localHistory.delete(id);
             if (lightbox?.id === id) setLightbox(null);
-            loadData(true);
+            goToPage(currentPage);
         }
     };
 
@@ -171,7 +230,7 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
                 await localHistory.keepOnly(cleanCount);
             }
             setShowCleanModal(false);
-            loadData(true); // 重新加载第一页
+            goToPage(1); // 重新加载第一页
             notify('清理完成');
         } catch (e: any) {
             notify('清理失败: ' + e.message, 'error');
@@ -211,50 +270,153 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
 
     return (
         <div className="flex-1 flex flex-col h-full bg-gray-50 dark:bg-gray-900 overflow-hidden">
-            <header className="p-4 md:p-6 bg-white dark:bg-gray-800 shadow-md flex justify-between items-center border-b border-gray-200 dark:border-gray-700 z-10 flex-shrink-0">
-                <div>
-                    <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">本地生图历史</h1>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">仅存储在您的浏览器中</p>
-                </div>
-                <div className="flex gap-2 md:gap-3 items-center">
-                    <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center">共 {totalCount} 张</div>
-                    <div className="relative">
-                        <button 
-                            onClick={() => setShowCleanMenu(!showCleanMenu)} 
-                            className="px-3 py-1 md:px-4 md:py-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded text-xs md:text-sm hover:bg-red-200 dark:hover:bg-red-900/50 flex items-center gap-1"
-                        >
-                            清理
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
-                        </button>
-                        {showCleanMenu && (
-                            <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50">
-                                <button 
-                                    onClick={handleClearAll} 
-                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 rounded-t-lg"
-                                >
-                                    🗑️ 清空全部
-                                </button>
-                                <button 
-                                    onClick={() => handleCleanMenuClick('days')} 
-                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-                                >
-                                    ⏰ 删除 X 天前的...
-                                </button>
-                                <button 
-                                    onClick={() => handleCleanMenuClick('count')} 
-                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 rounded-b-lg"
-                                >
-                                    📊 只保留最近 N 张...
-                                </button>
-                            </div>
-                        )}
+            <header className="p-4 md:p-6 bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700 z-10 flex-shrink-0">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">本地生图历史</h1>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">仅存储在您的浏览器中</p>
                     </div>
-                    <button onClick={() => loadData(true)} className="px-3 py-1 md:px-4 md:py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs md:text-sm hover:bg-gray-200 dark:hover:bg-gray-600">
-                        刷新
-                    </button>
+                    <div className="flex gap-2 md:gap-3 items-center">
+                        <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center">共 {totalCount} 张</div>
+                        <div className="relative">
+                            <button 
+                                onClick={() => setShowCleanMenu(!showCleanMenu)} 
+                                className="px-3 py-1 md:px-4 md:py-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded text-xs md:text-sm hover:bg-red-200 dark:hover:bg-red-900/50 flex items-center gap-1"
+                            >
+                                清理
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
+                            {showCleanMenu && (
+                                <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50">
+                                    <button 
+                                        onClick={handleClearAll} 
+                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 rounded-t-lg"
+                                    >
+                                        🗑️ 清空全部
+                                    </button>
+                                    <button 
+                                        onClick={() => handleCleanMenuClick('days')} 
+                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                                    >
+                                        ⏰ 删除 X 天前的...
+                                    </button>
+                                    <button 
+                                        onClick={() => handleCleanMenuClick('count')} 
+                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 rounded-b-lg"
+                                    >
+                                        📊 只保留最近 N 张...
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                        <button onClick={() => goToPage(currentPage)} className="px-3 py-1 md:px-4 md:py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs md:text-sm hover:bg-gray-200 dark:hover:bg-gray-600">
+                            刷新
+                        </button>
+                    </div>
                 </div>
+
+                {/* 分页控件 */}
+                {totalCount > 0 && (
+                    <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                        {/* 页码信息 */}
+                        <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-300">
+                            <span>第 {currentPage} 页 / 共 {totalPages} 页</span>
+                            <span className="text-gray-400 dark:text-gray-500">|</span>
+                            <span>显示 {Math.min((currentPage - 1) * PAGE_SIZE + 1, totalCount)} - {Math.min(currentPage * PAGE_SIZE, totalCount)} 张</span>
+                        </div>
+
+                        {/* 分页按钮 */}
+                        <div className="flex items-center gap-2">
+                            {/* 首页 */}
+                            <button
+                                onClick={() => goToPage(1)}
+                                disabled={currentPage === 1 || isLoading}
+                                className="px-2 py-1 text-xs bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                            >
+                                首页
+                            </button>
+
+                            {/* 上一页 */}
+                            <button
+                                onClick={() => goToPage(currentPage - 1)}
+                                disabled={currentPage === 1 || isLoading}
+                                className="px-2 py-1 text-xs bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                            >
+                                上一页
+                            </button>
+
+                            {/* 页码按钮 */}
+                            <div className="flex gap-1">
+                                {getPageButtons().map(page => (
+                                    <button
+                                        key={page}
+                                        onClick={() => goToPage(page)}
+                                        onMouseEnter={() => loadPage(page)}
+                                        className={`px-2 py-1 text-xs rounded border transition-colors ${
+                                            page === currentPage
+                                                ? 'bg-indigo-500 text-white border-indigo-500'
+                                                : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+                                        }`}
+                                    >
+                                        {page}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* 下一页 */}
+                            <button
+                                onClick={() => goToPage(currentPage + 1)}
+                                disabled={currentPage === totalPages || isLoading}
+                                className="px-2 py-1 text-xs bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                            >
+                                下一页
+                            </button>
+
+                            {/* 末页 */}
+                            <button
+                                onClick={() => goToPage(totalPages)}
+                                disabled={currentPage === totalPages || isLoading}
+                                className="px-2 py-1 text-xs bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                            >
+                                末页
+                            </button>
+                        </div>
+
+                        {/* 页码输入框 */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600 dark:text-gray-300">跳至</span>
+                            <input
+                                type="number"
+                                min="1"
+                                max={totalPages}
+                                placeholder="页码"
+                                className="w-16 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        const page = parseInt((e.target as HTMLInputElement).value);
+                                        if (page >= 1 && page <= totalPages) {
+                                            goToPage(page);
+                                        }
+                                    }
+                                }}
+                            />
+                            <button
+                                onClick={() => {
+                                    const input = document.querySelector('input[placeholder="页码"]') as HTMLInputElement;
+                                    const page = parseInt(input.value);
+                                    if (page >= 1 && page <= totalPages) {
+                                        goToPage(page);
+                                    }
+                                }}
+                                className="px-2 py-1 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600 transition-colors"
+                            >
+                                跳转
+                            </button>
+                        </div>
+                    </div>
+                )}
             </header>
 
             <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20">
@@ -287,26 +449,15 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
                             ))}
                         </div>
                         
-                        {/* 底部加载区域 */}
-                        <div className="flex flex-col items-center justify-center py-8">
+                        {/* 底部分页信息 */}
+                        <div className="flex flex-col items-center justify-center py-6">
                             {isLoading ? (
                                 <div className="text-gray-500 dark:text-gray-400">⏳ 加载中...</div>
-                            ) : hasMore ? (
-                                <>
-                                    <button
-                                        onClick={() => loadData(false)}
-                                        className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold shadow-lg transition-colors"
-                                    >
-                                        加载更多
-                                    </button>
-                                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                                        已加载 {items.length} / {totalCount} 张
-                                    </p>
-                                </>
                             ) : (
-                                <p className="text-sm text-gray-500 dark:text-gray-400">
-                                    ✓ 已加载全部 {totalCount} 张
-                                </p>
+                                <div className="text-sm text-gray-500 dark:text-gray-400 text-center">
+                                    <p>当前显示第 {Math.min((currentPage - 1) * PAGE_SIZE + 1, totalCount)} - {Math.min(currentPage * PAGE_SIZE, totalCount)} 张</p>
+                                    <p className="mt-1">共 {totalCount} 张，已缓存 {Object.keys(pageCache).length} 页</p>
+                                </div>
                             )}
                         </div>
                     </>
