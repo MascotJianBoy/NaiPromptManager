@@ -92,23 +92,26 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
         return data;
     };
 
-    // 更新缓存策略
+    // 更新缓存策略（合并为一次状态更新，避免覆盖）
     const updateCache = (page: number, data: LocalGenItem[]) => {
-        // 更新当前页缓存
-        setPageCache(prev => ({
-            ...prev,
-            [page]: data
-        }));
-
-        // 清理超出范围的缓存（只保留当前页 ± 1 页）
+        // 定义需要保留的页码范围（当前页 ± 1 页）
         const validPages = [page - 1, page, page + 1].filter(p => p >= 1);
+        
+        // 一次性更新缓存：添加新数据 + 清理旧数据
         setPageCache(prev => {
             const newCache: Record<number, LocalGenItem[]> = {};
+            
+            // 保留有效范围内的已缓存数据
             validPages.forEach(p => {
                 if (prev[p]) {
                     newCache[p] = prev[p];
                 }
             });
+            
+            // 添加当前页的新数据
+            newCache[page] = data;
+            
+            console.log(`[缓存更新] 页码 ${page}，缓存范围:`, Object.keys(newCache).map(Number).sort());
             return newCache;
         });
     };
