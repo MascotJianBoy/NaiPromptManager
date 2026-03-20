@@ -607,7 +607,24 @@ export default {
          if (currentUser.role !== 'admin') return error('Forbidden', 403);
          const userId = path.split('/')[3];
          const { maxStorage } = await request.json() as any;
-         if (typeof maxStorage !== 'number' || maxStorage < 0) return error('Invalid maxStorage value', 400);
+         
+         // 输入验证
+         if (typeof maxStorage !== 'number' || maxStorage < 0) {
+           return error('Invalid maxStorage value: must be a non-negative number', 400);
+         }
+         
+         // 设置合理的上限（100GB）
+         const MAX_QUOTA_LIMIT = 100 * 1024 * 1024 * 1024; // 100GB
+         if (maxStorage > MAX_QUOTA_LIMIT) {
+           return error(`Invalid maxStorage value: exceeds maximum limit of 100GB`, 400);
+         }
+         
+         // 验证用户是否存在
+         const targetUser = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
+         if (!targetUser) {
+           return error('User not found', 404);
+         }
+         
          await db.prepare('UPDATE users SET max_storage = ? WHERE id = ?').bind(maxStorage, userId).run();
          return json({ success: true });
       }

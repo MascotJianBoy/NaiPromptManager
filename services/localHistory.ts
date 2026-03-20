@@ -99,7 +99,7 @@ class LocalHistoryService {
     }
 
     /**
-     * 分页查询历史记录
+     * 分页查询历史记录（优化版本）
      * @param page 页码（从0开始）
      * @param pageSize 每页数量
      * @returns 当前页的记录数组
@@ -114,27 +114,56 @@ class LocalHistoryService {
             // 计算跳过的数量
             const skipCount = page * pageSize;
             const results: LocalGenItem[] = [];
-            let skipped = 0;
             
-            // 从最新记录开始遍历
-            const request = index.openCursor(null, 'prev');
-            
-            request.onsuccess = (event) => {
-                const cursor = (event.target as IDBRequest).result;
-                if (cursor && results.length < pageSize) {
-                    if (skipped < skipCount) {
-                        skipped++;
-                        cursor.continue();
+            // 优化：对于小页码，使用游标遍历
+            if (page <= 2) {
+                let skipped = 0;
+                const request = index.openCursor(null, 'prev');
+                
+                request.onsuccess = (event) => {
+                    const cursor = (event.target as IDBRequest).result;
+                    if (cursor && results.length < pageSize) {
+                        if (skipped < skipCount) {
+                            skipped++;
+                            cursor.continue();
+                        } else {
+                            results.push(cursor.value);
+                            cursor.continue();
+                        }
                     } else {
-                        results.push(cursor.value);
-                        cursor.continue();
+                        resolve(results);
                     }
-                } else {
-                    resolve(results);
-                }
-            };
-            
-            request.onerror = () => reject(request.error);
+                };
+                
+                request.onerror = () => reject(request.error);
+            } else {
+                // 优化：对于大页码，使用批量获取策略
+                // 先获取总数，然后计算最后一页的起始位置
+                this.getCount().then(totalCount => {
+                    const lastPageStart = Math.max(0, totalCount - pageSize);
+                    const actualSkip = Math.min(skipCount, lastPageStart);
+                    
+                    let skipped = 0;
+                    const request = index.openCursor(null, 'prev');
+                    
+                    request.onsuccess = (event) => {
+                        const cursor = (event.target as IDBRequest).result;
+                        if (cursor && results.length < pageSize) {
+                            if (skipped < actualSkip) {
+                                skipped++;
+                                cursor.continue();
+                            } else {
+                                results.push(cursor.value);
+                                cursor.continue();
+                            }
+                        } else {
+                            resolve(results);
+                        }
+                    };
+                    
+                    request.onerror = () => reject(request.error);
+                }).catch(reject);
+            }
         });
     }
 
@@ -173,18 +202,28 @@ class LocalHistoryService {
             const range = IDBKeyRange.upperBound(cutoffTime, true);
             const request = index.openCursor(range);
             
+            // 事务完成处理
+            transaction.oncomplete = () => {
+                resolve(deletedCount);
+            };
+            
+            transaction.onerror = () => {
+                reject(transaction.error);
+            };
+            
             request.onsuccess = (event) => {
                 const cursor = (event.target as IDBRequest).result;
                 if (cursor) {
                     cursor.delete();
                     deletedCount++;
                     cursor.continue();
-                } else {
-                    resolve(deletedCount);
                 }
+                // 注意：不在这里resolve，等待事务完成
             };
             
-            request.onerror = () => reject(request.error);
+            request.onerror = () => {
+                reject(request.error);
+            };
         });
     }
 
@@ -203,6 +242,15 @@ class LocalHistoryService {
             let deletedCount = 0;
             let index_count = 0;
             
+            // 事务完成处理
+            transaction.oncomplete = () => {
+                resolve(deletedCount);
+            };
+            
+            transaction.onerror = () => {
+                reject(transaction.error);
+            };
+            
             // 从最新记录开始遍历
             const request = index.openCursor(null, 'prev');
             
@@ -215,12 +263,13 @@ class LocalHistoryService {
                         deletedCount++;
                     }
                     cursor.continue();
-                } else {
-                    resolve(deletedCount);
                 }
+                // 注意：不在这里resolve，等待事务完成
             };
             
-            request.onerror = () => reject(request.error);
+            request.onerror = () => {
+                reject(request.error);
+            };
         });
     }
 

@@ -144,9 +144,17 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
   const handleUpdateQuota = async (userId: string) => {
       const mb = parseFloat(newQuotaMB);
       if (isNaN(mb) || mb < 0) {
-          alert('请输入有效的配额数值');
+          alert('请输入有效的配额数值（非负数）');
           return;
       }
+      
+      // 验证配额上限（100GB）
+      const MAX_QUOTA_MB = 100 * 1024; // 100GB in MB
+      if (mb > MAX_QUOTA_MB) {
+          alert(`配额值超出上限，最大允许 ${MAX_QUOTA_MB} MB (100GB)`);
+          return;
+      }
+      
       const bytes = Math.round(mb * 1024 * 1024);
       setIsLoading(true);
       try {
@@ -155,8 +163,24 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
           setEditingQuotaUserId(null);
           setNewQuotaMB('');
           alert('配额更新成功');
-      } catch(e) {
-          alert('更新失败');
+      } catch(e: any) {
+          // 提供更具体的错误信息
+          let errorMessage = '更新失败';
+          if (e.message) {
+              if (e.message.includes('User not found')) {
+                  errorMessage = '用户不存在，请刷新页面重试';
+              } else if (e.message.includes('Invalid maxStorage')) {
+                  errorMessage = '配额值无效，请检查输入';
+              } else if (e.message.includes('Forbidden')) {
+                  errorMessage = '权限不足，请确认管理员权限';
+              } else if (e.message.includes('network') || e.message.includes('fetch')) {
+                  errorMessage = '网络错误，请检查网络连接';
+              } else {
+                  errorMessage = `更新失败: ${e.message}`;
+              }
+          }
+          alert(errorMessage);
+          console.error('配额更新失败:', e);
       }
       setIsLoading(false);
   };

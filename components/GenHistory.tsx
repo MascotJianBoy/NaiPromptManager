@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { localHistory } from '../services/localHistory';
 import { db } from '../services/dbService';
 import { LocalGenItem, User } from '../types';
+import { PAGINATION_CONFIG } from '../config/pagination';
 
 interface GenHistoryProps {
     currentUser: User;
@@ -41,16 +42,39 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
     const [showCleanMenu, setShowCleanMenu] = useState(false);
     const [showCleanModal, setShowCleanModal] = useState(false);
     const [cleanMode, setCleanMode] = useState<'days' | 'count'>('days');
-    const [cleanDays, setCleanDays] = useState(7);
-    const [cleanCount, setCleanCount] = useState(100);
+    const [cleanDays, setCleanDays] = useState<number>(PAGINATION_CONFIG.CLEANUP.DEFAULT_DAYS);
+    const [cleanCount, setCleanCount] = useState<number>(PAGINATION_CONFIG.CLEANUP.DEFAULT_COUNT);
     const [cleanPreviewCount, setCleanPreviewCount] = useState(0);
 
     useEffect(() => {
         loadData(true);
     }, []);
 
-    const PAGE_SIZE = 20;
-    const MAX_CACHED_PAGES = 3;
+    const { PAGE_SIZE, MAX_CACHED_PAGES } = PAGINATION_CONFIG;
+
+    // 内存管理：估算单条记录大小（字节）
+    const estimateItemSize = (item: LocalGenItem): number => {
+        // 基础字段大小估算
+        const baseSize = 100; // id, createdAt等基础字段
+        const promptSize = (item.prompt?.length || 0) * 2; // UTF-16编码
+        const imageUrlSize = (item.imageUrl?.length || 0) * 2;
+        const paramsSize = JSON.stringify(item.params || {}).length * 2;
+        return baseSize + promptSize + imageUrlSize + paramsSize;
+    };
+
+    // 内存管理：检查缓存大小是否合理
+    const checkMemoryUsage = (items: LocalGenItem[]): boolean => {
+        const MAX_CACHE_SIZE = 50 * 1024 * 1024; // 50MB最大缓存
+        let totalSize = 0;
+        for (const item of items) {
+            totalSize += estimateItemSize(item);
+            if (totalSize > MAX_CACHE_SIZE) {
+                console.warn('缓存大小超过限制，执行清理');
+                return false;
+            }
+        }
+        return true;
+    };
 
     const loadData = async (reset = false) => {
         if (isLoading) return;
@@ -73,6 +97,11 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
                 if (data.length > 0) {
                     setItems(prev => {
                         const newItems = [...prev, ...data];
+                        // 内存管理：检查缓存大小
+                        if (!checkMemoryUsage(newItems)) {
+                            // 如果缓存过大，只保留最新一页
+                            return data;
+                        }
                         // 最多保留 MAX_CACHED_PAGES 页数据
                         const maxItems = PAGE_SIZE * MAX_CACHED_PAGES;
                         if (newItems.length > maxItems) {
