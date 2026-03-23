@@ -206,7 +206,9 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
         if (confirm('确定删除这张图片记录吗？(无法恢复)')) {
             await localHistory.delete(id);
             if (lightbox?.id === id) setLightbox(null);
-            goToPage(currentPage);
+            // 清空缓存并强制刷新当前页
+            setCacheState({});
+            await goToPage(currentPage, true);
         }
     };
 
@@ -423,7 +425,12 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
             </header>
 
             <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20">
-                {items.length === 0 ? (
+                {isLoading ? (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                        <div className="text-4xl mb-2 animate-spin">⏳</div>
+                        <p>加载中...</p>
+                    </div>
+                ) : items.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400">
                         <div className="text-4xl mb-2">🕰️</div>
                         <p>暂无生成记录</p>
