@@ -53,6 +53,10 @@ class DBService {
     await api.put(`/users/${userId}/quota`, { maxStorage });
   }
 
+  async updateUserRole(userId: string, role: string): Promise<{ success: boolean; role: string; maxStorage: number }> {
+    return await api.put(`/users/${userId}/role`, { role });
+  }
+
   // --- Admin: Guest Settings & Import ---
   async getGuestCode(): Promise<string> {
     const res = await api.get('/admin/guest-setting');

@@ -1,7 +1,7 @@
 
 // Core Data Models
 
-export type UserRole = 'admin' | 'user' | 'guest';
+export type UserRole = 'admin' | 'vip' | 'user' | 'guest';
 
 export interface User {
   id: string;
