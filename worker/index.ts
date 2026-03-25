@@ -183,11 +183,11 @@ async function deleteR2File(env: Env, url: string) {
 
 // Helper: Process Base64 Image and Upload to R2 with Quota Check
 async function processImageUpload(
-    env: Env, 
-    imageData: string, 
-    folder: string, 
+    env: Env,
+    imageData: string,
+    folder: string,
     id: string,
-    user?: { id: string, role: string, storage_usage?: number }
+    user?: { id: string, role: string, storage_usage?: number, max_storage?: number }
 ): Promise<string> {
     if (imageData.startsWith('http') || imageData.startsWith('/api/')) return imageData;
 
@@ -214,8 +214,9 @@ async function processImageUpload(
 
     if (user && user.role !== 'admin') {
         const currentUsage = user.storage_usage || 0;
-        if (currentUsage + fileSize > MAX_STORAGE_QUOTA) {
-            throw new Error(`Storage quota exceeded (300MB limit).`);
+        const maxStorage = user.max_storage || 314572800; // 默认300MB
+        if (currentUsage + fileSize > maxStorage) {
+            throw new Error(`Storage quota exceeded (limit: ${Math.round(maxStorage / 1024 / 1024)}MB).`);
         }
     }
 
@@ -344,13 +345,13 @@ export default {
             .bind(sessionId, Date.now()).first<{user_id: string}>();
         if (!session) return null;
         try {
-            return await db.prepare('SELECT id, username, role, storage_usage FROM users WHERE id = ?')
-                .bind(session.user_id).first<{id: string, username: string, role: string, storage_usage: number}>();
+            return await db.prepare('SELECT id, username, role, storage_usage, max_storage FROM users WHERE id = ?')
+                .bind(session.user_id).first<{id: string, username: string, role: string, storage_usage: number, max_storage: number}>();
         } catch (e: any) {
              if (e.message && e.message.includes('no such column')) {
                  await initDB();
-                 return await db.prepare('SELECT id, username, role, storage_usage FROM users WHERE id = ?')
-                    .bind(session.user_id).first<{id: string, username: string, role: string, storage_usage: number}>();
+                 return await db.prepare('SELECT id, username, role, storage_usage, max_storage FROM users WHERE id = ?')
+                    .bind(session.user_id).first<{id: string, username: string, role: string, storage_usage: number, max_storage: number}>();
              }
              throw e;
         }
@@ -411,7 +412,7 @@ export default {
       if (path === '/api/auth/me' && method === 'GET') {
           const user = await getSessionUser();
           if (!user) return error('Unauthorized', 401);
-          return json({ id: user.id, username: user.username, role: user.role, storageUsage: user.storage_usage || 0 });
+          return json({ id: user.id, username: user.username, role: user.role, storageUsage: user.storage_usage || 0, maxStorage: user.max_storage || 314572800 });
       }
 
       // --- Authenticated Logic ---
@@ -561,7 +562,8 @@ export default {
           const fileSize = file.size;
           if (currentUser.role !== 'admin') {
               const currentUsage = currentUser.storage_usage || 0;
-              if (currentUsage + fileSize > MAX_STORAGE_QUOTA) return error(`Storage quota exceeded`, 413);
+              const maxStorage = currentUser.max_storage || 314572800; // 默认300MB
+              if (currentUsage + fileSize > maxStorage) return error(`Storage quota exceeded`, 413);
           }
           await env.BUCKET.put(filename, file.stream(), { httpMetadata: { contentType: file.type } });
           await db.prepare('UPDATE users SET storage_usage = COALESCE(storage_usage, 0) + ? WHERE id = ?').bind(fileSize, currentUser.id).run();
@@ -571,9 +573,24 @@ export default {
       // --- CRUD Routes ---
       if (path === '/api/users' && method === 'POST') {
           if (currentUser.role !== 'admin') return error('Forbidden', 403);
-          const { username, password } = await request.json() as any;
+          const { username, password, role = 'user' } = await request.json() as any;
+          
+          // 验证角色值
+          const validRoles = ['user', 'vip', 'admin'];
+          if (!validRoles.includes(role)) {
+              return error('Invalid role', 400);
+          }
+          
           const hashedPassword = await bcrypt.hash(password, 10);
-          try { await db.prepare('INSERT INTO users (id, username, password, role, created_at, storage_usage) VALUES (?, ?, ?, ?, ?, 0)').bind(crypto.randomUUID(), username, hashedPassword, 'user', Date.now()).run(); return json({ success: true }); } catch(e) { return error('Username exists', 409); }
+          const defaultQuota = role === 'vip' ? 524288000 : 314572800; // VIP: 500MB, User: 300MB
+          
+          try {
+              await db.prepare('INSERT INTO users (id, username, password, role, created_at, storage_usage, max_storage) VALUES (?, ?, ?, ?, ?, 0, ?)')
+                  .bind(crypto.randomUUID(), username, hashedPassword, role, Date.now(), defaultQuota).run();
+              return json({ success: true });
+          } catch(e) {
+              return error('Username exists', 409);
+          }
       }
       if (path === '/api/users/password' && method === 'PUT') {
           const { password } = await request.json() as any;
@@ -658,6 +675,38 @@ export default {
          }
 
          return json({ success: true });
+      }
+      
+      // 更新用户角色
+      if (path.match(/^\/api\/users\/[^/]+\/role$/) && method === 'PUT') {
+         if (currentUser.role !== 'admin') return error('Forbidden', 403);
+         const userId = path.split('/')[3];
+         const { role } = await request.json() as any;
+
+         // 验证角色值
+         const validRoles = ['user', 'vip', 'admin'];
+         if (!validRoles.includes(role)) {
+           return error('Invalid role value: must be user, vip, or admin', 400);
+         }
+
+         // 不能修改自己的角色
+         if (userId === currentUser.id) {
+           return error('Cannot change own role', 400);
+         }
+
+         // 获取用户当前信息
+         const targetUser = await db.prepare('SELECT id, role FROM users WHERE id = ?').bind(userId).first<{id: string, role: string}>();
+         if (!targetUser) {
+           return error('User not found', 404);
+         }
+
+         // 根据角色设置默认配额
+         const defaultQuota = role === 'vip' ? 524288000 : 314572800; // VIP: 500MB, User: 300MB
+
+         // 更新角色和配额
+         await db.prepare('UPDATE users SET role = ?, max_storage = ? WHERE id = ?').bind(role, defaultQuota, userId).run();
+
+         return json({ success: true, role, maxStorage: defaultQuota });
       }
 
       // Chains
