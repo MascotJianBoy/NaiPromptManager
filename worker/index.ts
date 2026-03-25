@@ -46,6 +46,36 @@ interface Env {
   // GUEST_PASSCODE removed, now stored in DB
 }
 
+// ==================== 角色策略配置 ====================
+// 统一的角色策略定义，前后端应共用此语义
+const ROLE_POLICY = {
+  // 有效角色列表
+  VALID_ROLES: ['user', 'vip', 'admin', 'guest'] as const,
+  
+  // 可管理画师的角色（admin + vip）
+  CAN_MANAGE_ARTISTS: ['admin', 'vip'] as const,
+  
+  // 默认存储配额（字节）
+  DEFAULT_QUOTA: {
+    user: 314572800,    // 300MB
+    vip: 524288000,     // 500MB
+    admin: null,        // admin 无限制，使用 null 表示
+    guest: 104857600,   // 100MB
+  } as const,
+  
+  // 判断是否可管理画师
+  canManageArtists: (role: string) => ['admin', 'vip'].includes(role),
+  
+  // 判断是否不受存储配额限制
+  isUnlimitedStorage: (role: string) => role === 'admin',
+  
+  // 获取默认配额，admin 返回 null 表示无限制
+  getDefaultQuota: (role: string): number | null => {
+    if (role === 'admin') return null;
+    return (ROLE_POLICY.DEFAULT_QUOTA as Record<string, number | null>)[role] ?? 314572800;
+  }
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
@@ -560,9 +590,10 @@ export default {
           const ext = file.name.split('.').pop() || 'png';
           const filename = `${folder}/${currentUser.id}_${Date.now()}.${ext}`;
           const fileSize = file.size;
-          if (currentUser.role !== 'admin') {
+          // 使用统一的角色策略检查存储配额
+          if (!ROLE_POLICY.isUnlimitedStorage(currentUser.role)) {
               const currentUsage = currentUser.storage_usage || 0;
-              const maxStorage = currentUser.max_storage || 314572800; // 默认300MB
+              const maxStorage = currentUser.max_storage || ROLE_POLICY.getDefaultQuota(currentUser.role) || 314572800;
               if (currentUsage + fileSize > maxStorage) return error(`Storage quota exceeded`, 413);
           }
           await env.BUCKET.put(filename, file.stream(), { httpMetadata: { contentType: file.type } });
@@ -575,14 +606,14 @@ export default {
           if (currentUser.role !== 'admin') return error('Forbidden', 403);
           const { username, password, role = 'user' } = await request.json() as any;
           
-          // 验证角色值
-          const validRoles = ['user', 'vip', 'admin'];
-          if (!validRoles.includes(role)) {
+          // 使用统一的角色策略验证角色值
+          if (!ROLE_POLICY.VALID_ROLES.includes(role as any) || role === 'guest') {
               return error('Invalid role', 400);
           }
           
           const hashedPassword = await bcrypt.hash(password, 10);
-          const defaultQuota = role === 'vip' ? 524288000 : 314572800; // VIP: 500MB, User: 300MB
+          // 使用统一的角色策略获取默认配额，admin 为 null 表示无限制
+          const defaultQuota = ROLE_POLICY.getDefaultQuota(role);
           
           try {
               await db.prepare('INSERT INTO users (id, username, password, role, created_at, storage_usage, max_storage) VALUES (?, ?, ?, ?, ?, 0, ?)')
@@ -681,11 +712,10 @@ export default {
       if (path.match(/^\/api\/users\/[^/]+\/role$/) && method === 'PUT') {
          if (currentUser.role !== 'admin') return error('Forbidden', 403);
          const userId = path.split('/')[3];
-         const { role } = await request.json() as any;
+         const { role, resetQuota = false } = await request.json() as any;
 
-         // 验证角色值
-         const validRoles = ['user', 'vip', 'admin'];
-         if (!validRoles.includes(role)) {
+         // 使用统一的角色策略验证角色值
+         if (!ROLE_POLICY.VALID_ROLES.includes(role as any) || role === 'guest') {
            return error('Invalid role value: must be user, vip, or admin', 400);
          }
 
@@ -695,18 +725,21 @@ export default {
          }
 
          // 获取用户当前信息
-         const targetUser = await db.prepare('SELECT id, role FROM users WHERE id = ?').bind(userId).first<{id: string, role: string}>();
+         const targetUser = await db.prepare('SELECT id, role, max_storage FROM users WHERE id = ?').bind(userId).first<{id: string, role: string, max_storage: number | null}>();
          if (!targetUser) {
            return error('User not found', 404);
          }
 
-         // 根据角色设置默认配额
-         const defaultQuota = role === 'vip' ? 524288000 : 314572800; // VIP: 500MB, User: 300MB
-
-         // 更新角色和配额
-         await db.prepare('UPDATE users SET role = ?, max_storage = ? WHERE id = ?').bind(role, defaultQuota, userId).run();
-
-         return json({ success: true, role, maxStorage: defaultQuota });
+         // 只有显式请求重置配额时才更新配额，避免隐藏副作用
+         if (resetQuota) {
+           const defaultQuota = ROLE_POLICY.getDefaultQuota(role);
+           await db.prepare('UPDATE users SET role = ?, max_storage = ? WHERE id = ?').bind(role, defaultQuota, userId).run();
+           return json({ success: true, role, maxStorage: defaultQuota });
+         } else {
+           // 仅更新角色，保留现有配额
+           await db.prepare('UPDATE users SET role = ? WHERE id = ?').bind(role, userId).run();
+           return json({ success: true, role, maxStorage: targetUser.max_storage });
+         }
       }
 
       // Chains
@@ -790,7 +823,8 @@ export default {
          return json(res.results.map((a: any) => ({ id: a.id, name: a.name, imageUrl: a.image_url, previewUrl: a.preview_url, benchmarks: a.benchmarks ? JSON.parse(a.benchmarks) : [] })));
       }
       if (path === '/api/artists' && method === 'POST') {
-        if (currentUser.role !== 'admin') return error('Forbidden', 403);
+        // 使用统一的角色策略检查画师管理权限（admin + vip）
+        if (!ROLE_POLICY.canManageArtists(currentUser.role)) return error('Forbidden', 403);
         const body = await request.json() as any;
         const id = body.id || crypto.randomUUID();
         
@@ -828,7 +862,8 @@ export default {
         return json({ success: true, benchmarks });
       }
       if (path.startsWith('/api/artists/') && method === 'DELETE') {
-        if (currentUser.role !== 'admin') return error('Forbidden', 403);
+        // 使用统一的角色策略检查画师管理权限（admin + vip）
+        if (!ROLE_POLICY.canManageArtists(currentUser.role)) return error('Forbidden', 403);
         const id = path.split('/').pop();
         const artist = await db.prepare('SELECT benchmarks, preview_url, image_url FROM artists WHERE id = ?').bind(id).first<{benchmarks: string, preview_url: string, image_url: string}>();
         if (artist) {

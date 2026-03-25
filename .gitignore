@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# TypeScript build cache
+*.tsbuildinfo
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -25,3 +28,6 @@ dist-ssr
 plans/*
 AGENTS.md
 docs/plans/
+
+# TypeScript build cache
+*.tsbuildinfo

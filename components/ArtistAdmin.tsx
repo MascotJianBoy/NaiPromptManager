@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/dbService';
 import { Artist, User, UsageStats, AccessLog, DailyStat } from '../types';
+import { ROLE_POLICY } from '../config/rolePolicy';
 
 interface ExtendedArtistAdminProps {
     currentUser: User;
@@ -14,13 +15,14 @@ interface ExtendedArtistAdminProps {
     onLogout?: () => void;
 }
 
-export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({ 
-    currentUser, artistsData, usersData, onRefreshArtists, onRefreshUsers, 
-    isDark, toggleTheme, onLogout 
+export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
+    currentUser, artistsData, usersData, onRefreshArtists, onRefreshUsers,
+    isDark, toggleTheme, onLogout
 }) => {
+  // 使用统一的角色策略
   const isAdmin = currentUser.role === 'admin';
   const isVip = currentUser.role === 'vip';
-  const canManageArtists = isAdmin || isVip;
+  const canManageArtists = ROLE_POLICY.canManageArtists(currentUser.role);
   const [activeTab, setActiveTab] = useState<'artist' | 'users' | 'profile' | 'stats'>(
     isAdmin ? 'artist' : (isVip ? 'artist' : 'profile')
   );
@@ -61,8 +63,11 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
   const [statsLoading, setStatsLoading] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
 
-  // Storage calculation helpers
-  const getMaxStorage = () => currentUser?.maxStorage || 300 * 1024 * 1024;
+  // Storage calculation helpers - 使用统一的角色策略
+  const getMaxStorage = () => {
+    if (ROLE_POLICY.isUnlimitedStorage(currentUser.role)) return Infinity;
+    return currentUser?.maxStorage || ROLE_POLICY.getDefaultQuota(currentUser.role) || 300 * 1024 * 1024;
+  };
   const formatBytes = (bytes?: number) => {
       if (!bytes) return '0 MB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -490,28 +495,25 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
                                             onChange={async (e) => {
                                                 const newRole = e.target.value;
                                                 try {
-                                                    await db.updateUserRole(u.id, newRole);
+                                                    // 角色变更时不自动重置配额，保留用户现有配额
+                                                    await db.updateUserRole(u.id, newRole, false);
                                                     await onRefreshUsers();
                                                 } catch (err) {
                                                     alert('角色更新失败');
                                                 }
                                             }}
-                                            className={`px-2 py-1 rounded text-xs border-0 cursor-pointer ${
-                                                u.role === 'admin' ? 'bg-red-100 text-red-600' :
-                                                u.role === 'vip' ? 'bg-yellow-100 text-yellow-700' :
-                                                'bg-green-100 text-green-600'
-                                            }`}
+                                            className={`px-2 py-1 rounded text-xs border-0 cursor-pointer ${ROLE_POLICY.getRoleBadgeClass(u.role as any)}`}
                                             disabled={u.id === currentUser.id}
                                         >
-                                            <option value="user">普通用户</option>
-                                            <option value="vip">VIP</option>
-                                            <option value="admin">管理员</option>
+                                            <option value="user">{ROLE_POLICY.getRoleDisplayName('user')}</option>
+                                            <option value="vip">{ROLE_POLICY.getRoleDisplayName('vip')}</option>
+                                            <option value="admin">{ROLE_POLICY.getRoleDisplayName('admin')}</option>
                                         </select>
                                     </td>
                                     <td className="p-4 text-sm text-gray-500">{formatDate(u.createdAt)}</td>
                                     <td className="p-4 text-sm text-gray-500">{formatDateTime(u.lastLogin)}</td>
                                     <td className="p-4">
-                                        {isAdminUser ? (
+                                        {ROLE_POLICY.isUnlimitedStorage(u.role) ? (
                                             <div className="text-xs text-gray-500">
                                                 <span className="text-green-600 dark:text-green-400 font-medium">无限制</span>
                                                 <div className="text-gray-400 mt-1">管理员不受存储配额限制</div>
@@ -519,7 +521,7 @@ export const ArtistAdmin: React.FC<ExtendedArtistAdminProps> = ({
                                         ) : (
                                             <>
                                                 <div className="text-xs text-gray-500 mb-1">
-                                                    {formatBytes(u.storageUsage)} / {formatBytes(u.maxStorage)}
+                                                    {formatBytes(u.storageUsage)} / {formatBytes(u.maxStorage || ROLE_POLICY.getDefaultQuota(u.role) || 0)}
                                                 </div>
                                                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
                                                     <div
