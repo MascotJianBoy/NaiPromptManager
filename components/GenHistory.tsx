@@ -4,28 +4,15 @@ import { localHistory } from '../services/localHistory';
 import { db } from '../services/dbService';
 import { LocalGenItem, User } from '../types';
 import { PAGINATION_CONFIG } from '../config/pagination';
+import { ParamsViewer } from './ParamsViewer';
 
 interface GenHistoryProps {
     currentUser: User;
     notify: (msg: string, type?: 'success' | 'error') => void;
+    onNavigateToPlayground?: () => void;
 }
 
-const UC_LABELS: Record<number, string> = {
-    0: 'Heavy (0)',
-    1: 'Light (1)',
-    2: 'Furry (2)',
-    3: 'Human (3)',
-    4: 'None (4)'
-};
-
-const ParamItem = ({ label, value }: { label: string, value: React.ReactNode }) => (
-    <div className="bg-gray-50 dark:bg-gray-800 p-2 rounded border border-gray-100 dark:border-gray-700/50">
-        <div className="text-[10px] text-gray-400 uppercase font-bold text-ellipsis overflow-hidden mb-0.5">{label}</div>
-        <div className="text-xs font-mono text-gray-800 dark:text-gray-200 font-medium truncate" title={String(value)}>{value}</div>
-    </div>
-);
-
-export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) => {
+export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify, onNavigateToPlayground }) => {
     const [items, setItems] = useState<LocalGenItem[]>([]);
     const [lightbox, setLightbox] = useState<LocalGenItem | null>(null);
     const [isPublishing, setIsPublishing] = useState(false);
@@ -493,44 +480,36 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify }) =
                             </div>
 
                             <div className="flex-1 overflow-y-auto space-y-6 pr-2 custom-scrollbar">
-                                {/* Prompt Section */}
-                                <div>
-                                    <div className="flex justify-between items-center mb-2">
-                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1">
-                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>
-                                            Prompt
-                                        </label>
-                                        <button
-                                            onClick={() => { navigator.clipboard.writeText(lightbox.prompt); notify('Prompt 已复制'); }}
-                                            className="text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
-                                        >
-                                            复制
-                                        </button>
-                                    </div>
-                                    <div className="text-xs text-gray-700 dark:text-gray-300 font-mono break-words bg-gray-50 dark:bg-gray-850 border border-gray-100 dark:border-gray-800 p-3 rounded-lg leading-relaxed select-text">
-                                        {lightbox.prompt}
-                                    </div>
-                                </div>
-
-                                {/* Parameters Grid */}
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1">
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
-                                        Parameters
-                                    </label>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <ParamItem label="Resolution" value={`${lightbox.params.width} × ${lightbox.params.height}`} />
-                                        <ParamItem label="Steps" value={lightbox.params.steps} />
-                                        <ParamItem label="Scale" value={lightbox.params.scale} />
-                                        <ParamItem label="Sampler" value={lightbox.params.sampler.replace(/_/g, ' ')} />
-                                        <ParamItem label="Seed" value={lightbox.params.seed ?? 'Random'} />
-                                        <ParamItem label="Quality Tags" value={lightbox.params.qualityToggle ? 'On' : 'Off'} />
-                                        <ParamItem label="UC Preset" value={lightbox.params.ucPreset !== undefined ? UC_LABELS[lightbox.params.ucPreset] ?? lightbox.params.ucPreset : '-'} />
-                                    </div>
-                                </div>
+                                <ParamsViewer
+                                    params={lightbox.params}
+                                    prompt={lightbox.prompt}
+                                    notify={notify}
+                                />
                             </div>
 
                             <div className="border-t border-gray-200 dark:border-gray-800 pt-4 mt-4 space-y-3 flex-shrink-0">
+                                {/* 导入到编辑器 */}
+                                <button
+                                    onClick={() => {
+                                        // 将完整参数存入 sessionStorage
+                                        const importData = {
+                                            prompt: lightbox.prompt,
+                                            negativePrompt: '', // 历史记录中负面词已融合在 params 里
+                                            params: lightbox.params,
+                                        };
+                                        sessionStorage.setItem('nai_pending_import', JSON.stringify(importData));
+                                        setLightbox(null);
+                                        notify('参数已准备就绪，正在跳转到编辑器...');
+                                        onNavigateToPlayground?.();
+                                    }}
+                                    className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-sm font-bold transition-all shadow-lg"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                    </svg>
+                                    导入到编辑器
+                                </button>
+
                                 <div className="p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
                                     <label className="block text-xs font-bold text-indigo-600 dark:text-indigo-400 mb-2">发布到灵感图库</label>
                                     <div className="flex gap-2">

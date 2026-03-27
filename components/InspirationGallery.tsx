@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../services/dbService';
 import { Inspiration, User } from '../types';
-import { extractMetadata } from '../services/metadataService';
+import { extractMetadata, parseNovelAIMetadata, ParsedNAIData } from '../services/metadataService';
+import { ParamsViewer } from './ParamsViewer';
 
 interface InspirationGalleryProps {
     currentUser: User;
@@ -10,6 +11,7 @@ interface InspirationGalleryProps {
     inspirationsData: Inspiration[] | null;
     onRefresh: () => Promise<void>;
     notify: (msg: string, type?: 'success' | 'error') => void;
+    onNavigateToPlayground?: () => void;
 }
 
 // Lazy Loading Component (Reused logic, kept separate per component for modularity if needed)
@@ -49,7 +51,7 @@ const LazyImage: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
     );
 };
 
-export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentUser, inspirationsData, onRefresh, notify }) => {
+export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentUser, inspirationsData, onRefresh, notify, onNavigateToPlayground }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [lightboxImg, setLightboxImg] = useState<{item: Inspiration, isEditing: boolean} | null>(null);
   const [uploadMode, setUploadMode] = useState(false);
@@ -257,7 +259,18 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
       )}
 
       {/* Lightbox / Details Editor */}
-      {lightboxImg && (
+      {lightboxImg && (() => {
+          // 尝试解析灵感图的 prompt 字符串，提取结构化参数
+          const parsedData: ParsedNAIData | null = (() => {
+              try {
+                  if (lightboxImg.item.prompt && lightboxImg.item.prompt.trim()) {
+                      return parseNovelAIMetadata(lightboxImg.item.prompt);
+                  }
+              } catch { /* 解析失败不影响展示 */ }
+              return null;
+          })();
+
+          return (
           <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 md:p-8" onClick={() => setLightboxImg(null)}>
               <div className="bg-white dark:bg-gray-900 w-full max-w-[90vw] h-[80vh] md:h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col lg:flex-row border border-gray-700" onClick={e => e.stopPropagation()}>
                   <div className="flex-1 bg-gray-100 dark:bg-black/50 flex items-center justify-center p-4 relative overflow-hidden h-1/2 lg:h-auto">
@@ -276,12 +289,25 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
                           <button onClick={() => setLightboxImg(null)} className="text-gray-400 hover:text-white">✕</button>
                       </div>
 
-                      <div className="flex-1 bg-gray-50 dark:bg-gray-950 p-4 rounded-lg border border-gray-200 dark:border-gray-800 overflow-y-auto mb-4">
-                           {lightboxImg.isEditing ? (
-                               <textarea className="w-full h-full bg-transparent outline-none resize-none font-mono text-sm dark:text-gray-300" value={lightboxImg.item.prompt} onChange={e => setLightboxImg({...lightboxImg, item: {...lightboxImg.item, prompt: e.target.value}})} />
-                           ) : (
-                               <p className="text-xs md:text-sm font-mono text-gray-800 dark:text-gray-300 break-words whitespace-pre-wrap">{lightboxImg.item.prompt}</p>
-                           )}
+                      <div className="flex-1 overflow-y-auto mb-4 custom-scrollbar">
+                          {lightboxImg.isEditing ? (
+                              <div className="bg-gray-50 dark:bg-gray-950 p-4 rounded-lg border border-gray-200 dark:border-gray-800 h-full">
+                                  <textarea className="w-full h-full bg-transparent outline-none resize-none font-mono text-sm dark:text-gray-300" value={lightboxImg.item.prompt} onChange={e => setLightboxImg({...lightboxImg, item: {...lightboxImg.item, prompt: e.target.value}})} />
+                              </div>
+                          ) : parsedData ? (
+                              /* 解析成功：使用 ParamsViewer 展示完整参数 */
+                              <ParamsViewer
+                                  params={parsedData.params}
+                                  prompt={parsedData.prompt}
+                                  negativePrompt={parsedData.negativePrompt}
+                                  notify={notify}
+                              />
+                          ) : (
+                              /* 解析失败或无数据：展示原始 prompt 文本 */
+                              <div className="bg-gray-50 dark:bg-gray-950 p-4 rounded-lg border border-gray-200 dark:border-gray-800">
+                                  <p className="text-xs md:text-sm font-mono text-gray-800 dark:text-gray-300 break-words whitespace-pre-wrap">{lightboxImg.item.prompt}</p>
+                              </div>
+                          )}
                       </div>
                       
                       <div className="flex flex-col gap-3">
@@ -292,6 +318,23 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
                               </div>
                           ) : (
                               <>
+                                {/* 导入到编辑器 */}
+                                {parsedData && (
+                                    <button
+                                        onClick={() => {
+                                            sessionStorage.setItem('nai_pending_import', JSON.stringify(parsedData));
+                                            setLightboxImg(null);
+                                            notify('参数已准备就绪，正在跳转到编辑器...');
+                                            onNavigateToPlayground?.();
+                                        }}
+                                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-sm font-bold transition-all shadow-lg"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                        </svg>
+                                        导入到编辑器
+                                    </button>
+                                )}
                                 <button onClick={() => copyPrompt(lightboxImg.item.prompt)} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold">复制 Prompt</button>
                                 {canEdit(lightboxImg.item) && (
                                     <button onClick={() => setLightboxImg({...lightboxImg, isEditing: true})} className="w-full py-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg">编辑详情</button>
@@ -309,7 +352,8 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
                   </div>
               </div>
           </div>
-      )}
+          );
+      })()}
     </div>
   );
 };
