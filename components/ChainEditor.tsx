@@ -5,7 +5,7 @@ import { compilePrompt } from '../services/promptUtils';
 import { generateImage } from '../services/naiService';
 import { localHistory } from '../services/localHistory';
 import { api } from '../services/api';
-import { extractMetadata, parseNovelAIMetadata } from '../services/metadataService';
+import { extractMetadata, parseNovelAIMetadata, IMPORT_SESSION_KEY } from '../services/metadataService';
 import { ChainEditorParams } from './ChainEditorParams';
 import { ChainEditorPreview } from './ChainEditorPreview';
 
@@ -158,18 +158,18 @@ export const ChainEditor: React.FC<ChainEditorProps> = ({ chain, allChains, curr
 
     // --- sessionStorage 侦听：接收来自历史/灵感页面的一键导入数据 ---
     useEffect(() => {
-        const raw = sessionStorage.getItem('nai_pending_import');
+        const raw = sessionStorage.getItem(IMPORT_SESSION_KEY);
         if (!raw) return;
 
         try {
             const data = JSON.parse(raw) as { prompt: string; negativePrompt: string; params: NAIParams };
             // 清除标志位，防止重复消费
-            sessionStorage.removeItem('nai_pending_import');
+            sessionStorage.removeItem(IMPORT_SESSION_KEY);
             // 应用数据到当前编辑器
             applyImportData(data);
         } catch (e) {
             console.error('解析 pending import 数据失败', e);
-            sessionStorage.removeItem('nai_pending_import');
+            sessionStorage.removeItem(IMPORT_SESSION_KEY);
         }
     }, [chain.id]); // 仅在编辑器挂载或 chain 切换时消费
 

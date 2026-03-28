@@ -4,6 +4,7 @@ import { localHistory } from '../services/localHistory';
 import { db } from '../services/dbService';
 import { LocalGenItem, User } from '../types';
 import { PAGINATION_CONFIG } from '../config/pagination';
+import { IMPORT_SESSION_KEY } from '../services/metadataService';
 import { ParamsViewer } from './ParamsViewer';
 
 interface GenHistoryProps {
@@ -497,7 +498,7 @@ export const GenHistory: React.FC<GenHistoryProps> = ({ currentUser, notify, onN
                                             negativePrompt: '', // 历史记录中负面词已融合在 params 里
                                             params: lightbox.params,
                                         };
-                                        sessionStorage.setItem('nai_pending_import', JSON.stringify(importData));
+                                        sessionStorage.setItem(IMPORT_SESSION_KEY, JSON.stringify(importData));
                                         setLightbox(null);
                                         notify('参数已准备就绪，正在跳转到编辑器...');
                                         onNavigateToPlayground?.();

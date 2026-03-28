@@ -14,6 +14,12 @@ import { NAI_QUALITY_TAGS, NAI_UC_PRESETS } from './promptUtils';
 
 // ========== 类型定义 ==========
 
+/** 用于跨组件传递待导入数据的 SessionStorage Key */
+export const IMPORT_SESSION_KEY = 'nai_pending_import';
+
+/** 安全的 ID 生成器回退 */
+const safeUUID = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+
 /** parseNovelAIMetadata 返回的结构化解析结果 */
 export interface ParsedNAIData {
     /** 正面提示词（已剥离 Quality Tags 后缀） */
@@ -23,6 +29,15 @@ export interface ParsedNAIData {
     /** 完整的生成参数（不含 Boilerplate 固定参数） */
     params: NAIParams;
 }
+
+// ========== 常量 / 预编译正则 ==========
+const COMPILED_REGEX = {
+    Steps: /Steps:\s*([^,]+)/,
+    Sampler: /Sampler:\s*([^,]+)/,
+    'CFG scale': /CFG scale:\s*([^,]+)/,
+    Seed: /Seed:\s*([^,]+)/,
+    Size: /Size:\s*([^,]+)/
+};
 
 // ========== 文件级元数据提取 ==========
 
@@ -135,7 +150,7 @@ export const parseNovelAIMetadata = (
                 newParams.characters = [];
                 if (v4.caption?.char_captions && Array.isArray(v4.caption.char_captions)) {
                     newParams.characters = v4.caption.char_captions.map((cc: any): CharacterParams => ({
-                        id: crypto.randomUUID(),
+                        id: safeUUID(),
                         prompt: cc.char_caption || '',
                         x: cc.centers?.[0]?.x ?? 0.5,
                         y: cc.centers?.[0]?.y ?? 0.5,
@@ -179,9 +194,8 @@ export const parseNovelAIMetadata = (
 
         if (stepsIndex !== -1) {
             const paramStr = rawMetadata.substring(stepsIndex);
-            const getVal = (key: string): string | null => {
-                const regex = new RegExp(`${key}:\\s*([^,]+)`);
-                const match = paramStr.match(regex);
+            const getVal = (key: keyof typeof COMPILED_REGEX): string | null => {
+                const match = paramStr.match(COMPILED_REGEX[key]);
                 return match ? match[1].trim() : null;
             };
 

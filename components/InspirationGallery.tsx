@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../services/dbService';
 import { Inspiration, User } from '../types';
-import { extractMetadata, parseNovelAIMetadata, ParsedNAIData } from '../services/metadataService';
+import { extractMetadata, parseNovelAIMetadata, ParsedNAIData, IMPORT_SESSION_KEY } from '../services/metadataService';
 import { ParamsViewer } from './ParamsViewer';
 
 interface InspirationGalleryProps {
@@ -260,15 +260,15 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
 
       {/* Lightbox / Details Editor */}
       {lightboxImg && (() => {
-          // 尝试解析灵感图的 prompt 字符串，提取结构化参数
-          const parsedData: ParsedNAIData | null = (() => {
+          // 尝试解析灵感图的 prompt 字符串，提取结构化参数，使用 useMemo 避免重复重排
+          const parsedData: ParsedNAIData | null = useMemo(() => {
               try {
                   if (lightboxImg.item.prompt && lightboxImg.item.prompt.trim()) {
                       return parseNovelAIMetadata(lightboxImg.item.prompt);
                   }
               } catch { /* 解析失败不影响展示 */ }
               return null;
-          })();
+          }, [lightboxImg.item.prompt]);
 
           return (
           <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 md:p-8" onClick={() => setLightboxImg(null)}>
@@ -322,7 +322,7 @@ export const InspirationGallery: React.FC<InspirationGalleryProps> = ({ currentU
                                 {parsedData && (
                                     <button
                                         onClick={() => {
-                                            sessionStorage.setItem('nai_pending_import', JSON.stringify(parsedData));
+                                            sessionStorage.setItem(IMPORT_SESSION_KEY, JSON.stringify(parsedData));
                                             setLightboxImg(null);
                                             notify('参数已准备就绪，正在跳转到编辑器...');
                                             onNavigateToPlayground?.();
