@@ -28,6 +28,10 @@ dist-ssr
 plans/*
 AGENTS.md
 docs/plans/
+.planning
 
-# TypeScript build cache
-*.tsbuildinfo
+# 本地部署数据
+local-data/
+
+# Wrangler 本地缓存
+.wrangler/
